@@ -23,7 +23,7 @@ const RDFTYPE = RDF('type')
 let messages = []
 
 /* build RDF answers */
-const buildRdf = (req, res) => {
+const buildRdf = (data, req, res) => {
     /* gets accept header */
     let serializationFormat = req.accepts()[0];
     let store = $rdf.graph()
@@ -40,13 +40,21 @@ const buildRdf = (req, res) => {
         const base = $rdf.sym(baseUrl);
         const baseNs = $rdf.Namespace(baseUrl+req.path);
 
-        /* add the type */
-        store.add(base, RDFTYPE, LDPCONTAINER);
+        /* if only one object is to be displayed */
+        if (Array.isArray(data)) {
+            /* add the type */
+            store.add(base, RDFTYPE, LDPCONTAINER);
 
-        /* inserts triples for each item of the store */
-        messages.forEach(function (message, idx) {
-            store.add(base, LDP('contains'), baseNs(idx+1));
-        });
+            /* inserts triples for each item of the store */
+            if (data) {
+                data.forEach(function (message, idx) {
+                    store.add(base, LDP('contains'), baseNs(idx+1));
+                });
+            }
+        } else {
+            store.add(data);
+        }
+        
 
         /* jump through some hoops for JSON-LD */
         if (serializationFormat == JSONLD) {
@@ -73,20 +81,29 @@ const buildRdf = (req, res) => {
                 }
             }
         })
-    }
-}
+                }
+            }
 
-/* parse everything as text (and try to get the best out of the libs) */
+/**
+* parse everything as text (and try to get the best out of the libs)
+*/
 app.use(bodyParser.text({ type: ACCEPTALL }))
 
 /* returns an accordingly formatted response to the base object */
 app.get('/', (req, res) => {
-    buildRdf(req, res);
+    buildRdf(messages, req, res);
 })
 
-/* needs to receive the document and format it */
+/**
+* needs to receive the document and format it
+*/
 app.get('/:id', (req, res) => {
-
+    if (messages.length < req.params.id || req.params.id < 1) {
+        res.status(404).send("No document found with id "+req.params.id);
+    } else {
+        buildRdf(messages[req.params.id-1], req, res)
+        //res.send(req.params.id);
+    }
 })
 
 /* does not support JSON-LD yet */
