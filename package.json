@@ -1,0 +1,19 @@
+{
+  "name": "express_ld",
+  "version": "1.0.0",
+  "description": "A simple store for linked data based on nodejs",
+  "main": "index.js",
+  "scripts": {
+    "start": "node_modules/nodemon/bin/nodemon.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "body-parser": "^1.17.2",
+    "express": "^4.15.3",
+    "jsonld": "^0.4.12",
+    "nodemon": "^1.11.0",
+    "rdflib": "^0.15.0"
+  }
+}
