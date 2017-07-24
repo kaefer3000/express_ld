@@ -11,6 +11,8 @@ const express = require('express');
 const logger = require('morgan');
 // Load some parsers for HTTP message bodys
 const bodyParser = require('body-parser');
+// To make HTTP requests
+const request = require('request');
 // Load RDF
 const rdf = require('rdf-ext')
 // Load the RDF parsers for HTTP messages
@@ -19,6 +21,7 @@ const RdfXmlSerializer = require('rdf-serializer-rdfxml');
 
 // The root app
 const app = express();
+app.use(logger('dev'));
 
 // Preparing to use my rdf/xml serialiser
 const formatparams = {};
@@ -86,6 +89,7 @@ const cache = new RdfTermCache(50);
 const nsm = new NamespaceManager(cache);
 nsm.createNamespace('rdf', 'http://www.w3.org/1999/02/22-rdf-syntax-ns#');
 nsm.createNamespace('ldp', 'http://www.w3.org/ns/ldp#');
+nsm.createNamespace('schema', 'http://schema.org/');
 
 // Where the data will be stored
 let collection = {};
@@ -123,64 +127,141 @@ app.get('/', (req, res) => {
  * GET entry of collection
  */
 app.get('/:id', (req, res) => {
-  const collectionKeys = Object.keys(collection);
-  if (! req.params.id in collectionKeys) {
+  if (!(req.params.id in collection)) {
     res.sendStatus(404);
     return;
   } else {
-    res.status(200).send(collection[req.params.id].toString());
+    if ('text' in collection[req.params.id])
+      res.sendGraph(rdf.createGraph([rdf.createTriple(cache.getIRI('#it'), nsm.ns.schema('text'), cache.getLiteral(collection[req.params.id].text))]));
+    else if ('image' in collection[req.params.id])
+      res.sendGraph(rdf.createGraph([rdf.createTriple(cache.getIRI('#it'), nsm.ns.schema('image'), cache.getIRI(collection[req.params.id].image))]));
+    else
+      res.sendStatus(500);
   }
 });
 
 /**
  * POST something to collection
  */
-app.post('/', (request, response) => {
-  if (!request.graph) {
-    response.status(400);
-    response.send("Please supply a parseable graph.");
+app.post('/', (req, res) => {
+  if (!req.graph) {
+    res.status(400);
+    res.send("Please supply a parseable graph.");
     return;
   }
   do {
   ++nextCollectionIdxToCheck;
   } while (nextCollectionIdxToCheck - 1 in collection);
   
-  collection[nextCollectionIdxToCheck - 1] = request.graph;
-  response.location(nextCollectionIdxToCheck - 1);
-  response.sendStatus(201);
+  var targetStateTripleCount = 0;
+  var statetriple;
+  req.graph.filter(
+    function(triple) {
+      return triple.predicate.nominalValue === 'http://schema.org/text' || triple.predicate.nominalValue === 'http://schema.org/image'
+        }).forEach(function(triple) {
+          ++targetStateTripleCount;
+          statetriple = triple;
+        });
+  if (targetStateTripleCount === 0 || targetStateTripleCount > 1) {
+      res.status(400);
+      res.send('Please supply exactly one triple with predicate http://schema.org/text or http://schema.org/image\n');
+      return;
+  }
+
+  switch (statetriple.predicate.nominalValue) {
+    case "http://schema.org/text":
+      if (statetriple.object.interfaceName !== "Literal") {
+        res.status(400);
+        res.send("Please supply a Literal in object position");
+        return;
+      }
+      collection[nextCollectionIdxToCheck - 1] = { "text" : statetriple.object.nominalValue } ;
+      break;
+    case "http://schema.org/image":
+      if (statetriple.object.interfaceName !== "NamedNode") {
+        res.status(400);
+        res.send("Please supply an URI in object position");
+        return;
+      }
+      collection[nextCollectionIdxToCheck - 1] = { "image" : statetriple.object.nominalValue } ;
+      break;
+    default:
+      res.status(400);
+      res.send('Please supply a triple with saref:hasState as predicate and saref:Off or saref:On as object\n');
+      return;
+  };
+
+  res.location(nextCollectionIdxToCheck - 1);
+  res.sendStatus(201);
 });
 
 /**
  * PUT something to collection
  */
-app.post('/:id', (request, response) => {
-  if (!request.graph) {
-    response.status(400);
-    response.send("Please supply a parseable graph.");
+app.put('/:id', (req, res) => {
+  if (!req.graph) {
+    res.status(400);
+    res.send("Please supply a parseable graph.");
     return;
   }
 
   let overwriting = false;
-  if (request.params.id in collection)
+  if (req.params.id in collection)
     overwriting = true;
 
-  collection[request.params.id] = request.graph;
+  var targetStateTripleCount = 0;
+  var statetriple;
+  req.graph.filter(
+    function(triple) {
+      return triple.predicate.nominalValue === 'http://schema.org/text' || triple.predicate.nominalValue === 'http://schema.org/image'
+        }).forEach(function(triple) {
+          ++targetStateTripleCount;
+          statetriple = triple;
+        });
+  if (targetStateTripleCount === 0 || targetStateTripleCount > 1) {
+      res.status(400);
+      res.send('Please supply exactly one triple with predicate http://schema.org/text or http://schema.org/image\n');
+      return;
+  }
+
+  switch (statetriple.predicate.nominalValue) {
+    case "http://schema.org/text":
+      if (statetriple.object.interfaceName !== "Literal") {
+        res.status(400);
+        res.send("Please supply a Literal in object position");
+        return;
+      }
+      collection[req.params.id] = { "text" : statetriple.object.nominalValue } ;
+      break;
+    case "http://schema.org/image":
+      if (statetriple.object.interfaceName !== "NamedNode") {
+        res.status(400);
+        res.send("Please supply an URI in object position");
+        return;
+      }
+      collection[req.params.id] = { "image" : statetriple.object.nominalValue } ;
+      break;
+    default:
+      res.status(400);
+      res.send('Please supply a triple with saref:hasState as predicate and saref:Off or saref:On as object\n');
+      return;
+  };
 
   if (overwriting)
-    response.sendStatus(200);
+    res.sendStatus(200);
   else
-    response.sendStatus(201);
+    res.sendStatus(201);
 });
 
 /**
  * DELETE one thing in the collection 
  */
-app.delete('/:id', (request, response) => {
-  if (request.params.id in collection) {
-    delete collection[request.params.id];
-    response.sendStatus(204);
+app.delete('/:id', (req, res) => {
+  if (req.params.id in collection) {
+    delete collection[req.params.id];
+    res.sendStatus(204);
   } else 
-    response.sendStatus(404);
+    res.sendStatus(404);
 });
 
 /**
@@ -191,6 +272,30 @@ app.delete('/', (req, res) => {
   res.sendStatus(204);
 });
 
+/**
+ * Periodically updating the screen
+ */
+let previouslyPostedData = "";
+const checknpost = function() {
+  let requestPayload = [];
+  const currentCollection = JSON.stringify(collection);
+  if (currentCollection !== previouslyPostedData) {
+    previouslyPostedData = currentCollection;
+    Object.keys(collection).forEach(key => {
+      requestPayload.push(collection[key]);
+    });
+    request({
+      uri : "http://localhost:5000/",
+      method : "PUT",
+      timeout : 50,
+      json : requestPayload
+    }, (err) => {
+      if (err)
+        console.log(err);
+    });
+  }
+};
+let timeout = setInterval(checknpost, 500);
 
 /**
  * makes the app listen on the selected port
