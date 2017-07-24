@@ -1,170 +1,306 @@
 /* we'll write proper js code */
 "use strict";
 
-const $rdf = require('rdflib');
-const jsonld = require('jsonld');
+const httpPort = 8080;
+
+// Load a LRU cache implementation
+const LRUcache = require('lru-cache-js')
+// Load the web framework
 const express = require('express');
-
-/* Declare Express App and its port */
-const app = express();
-const httpPort = 3000;
-
-/* Include body-parser middleware */
+// Load the logger for the web framework
+const logger = require('morgan');
+// Load some parsers for HTTP message bodys
 const bodyParser = require('body-parser');
+// To make HTTP requests
+const request = require('request');
+// Load RDF
+const rdf = require('rdf-ext')
+// Load the RDF parsers for HTTP messages
+const rdfBodyParser = require('rdf-body-parser');
+const RdfXmlSerializer = require('rdf-serializer-rdfxml');
 
-/* Content-type contant for JSONLD and accept all*/
-const JSONLD = "application/ld+json";
-const ACCEPTALL = "*/*";
+// The root app
+const app = express();
+app.use(logger('dev'));
 
-/* required RDF predefinitions */
-const LDP = $rdf.Namespace("http://www.w3.org/ns/ldp#");
-const RDF = $rdf.Namespace("http://www.w3.org/1999/02/22-rdf-syntax-ns#");
-const RDFS = $rdf.Namespace("http://www.w3.org/2000/01/rdf-schema#");
+// Preparing to use my rdf/xml serialiser
+const formatparams = {};
+formatparams.serializers = new rdf.Serializers();
+formatparams.serializers['application/rdf+xml'] = RdfXmlSerializer;
+// Registering the serialiser with the common serialisers/parsers
+const formats = require('rdf-formats-common')(formatparams);
 
-const LDPCONTAINER = LDP('BasicContainer');
-const RDFTYPE = RDF('type');
+// Configuring a body parser to using Turtle as default media type, and registering the formats
+const configuredBodyParser = rdfBodyParser({'defaultMediaType' : 'text/turtle', 'formats' : formats});
 
-/* message store */
-let messages = []
-
-/* build RDF answers */
-const buildRdf = (data, req, res) => {
-    /* gets accept header */
-    let serializationFormat = req.accepts()[0];
-    let store = $rdf.graph();
-
-    /* send error, if no serialization format is set */
-    console.log(serializationFormat);
-    if (!serializationFormat ||  serializationFormat == ACCEPTALL) {
-        res.status(400).send("Set accept header, e.g. text/turtle application/rdf+xml application/ld+json");
-    } else {
-        let isJsonLd = false;
-
-        /* build base url dynamically */
-        const baseUrl = req.protocol + "://" + req.hostname;
-        const base = $rdf.sym(baseUrl);
-        const baseNs = $rdf.Namespace(baseUrl + req.path);
-
-        /* if only one object is to be displayed */
-        if (Array.isArray(data)) {
-            /* add the type */
-            store.add(base, RDFTYPE, LDPCONTAINER);
-
-            /* inserts triples for each item of the store */
-            if (data) {
-                data.forEach(function(message, idx) {
-                    store.add(base, LDP('contains'), baseNs(idx + 1));
-                });
-            }
-        } else {
-            store.add(data);
-        }
+// Registering the body parser with the app
+app.use(configuredBodyParser);
 
 
-        /* jump through some hoops for JSON-LD */
-        if (serializationFormat == JSONLD) {
-            serializationFormat = 'application/nquads';
-            isJsonLd = true;
-        }
+function NamespaceManager(rdftermcache) {
+  this.termcache = rdftermcache;
+  this.ns = {};
+};
+NamespaceManager.prototype.createNamespace = function(prefix, IRI) {
+  const that = this;
+  this.ns[prefix] = function(localname) {
+    return that.termcache.getIRI(IRI + localname);
+  };
+};
 
-        /* serializes the data */
-        $rdf.serialize(undefined, store, baseUrl, serializationFormat, (err, str) => {
-            if (err) {
-                res.status(400).send(err + "\nSet accept header to supported format, e.g. text/turtle application/rdf+xml application/ld+json");
-            } else {
-                /* use another transformation for JSON-LD */
-                if (isJsonLd) {
-                    jsonld.fromRDF(str, {
-                        format: 'application/nquads'
-                    }, function(err, doc) {
-                        if (err) {
-                            res.status(400).send(err);
-                        } else {
-                            res.send(doc);
-                        }
-                    });
-                } else {
-                    res.send(str);
-                }
-            }
-        })
-    }
-}
+function RdfTermCache(overallsize) {
+  // defaulting if nothing or rubbish is supplied:
+  if (typeof overallsize !== "number")
+    overallsize = 48;
+
+  var individualsize = Math.floor(overallsize / 3);
+  this.iris = new LRUcache(individualsize);
+  this.bnodes = new LRUcache(individualsize);
+  this.literals = new LRUcache(individualsize);
+};
+RdfTermCache.prototype.getIRI = function(string) {
+  var iri = this.iris.get(string);
+  if (iri === null) {
+    iri = new rdf.NamedNode(string)
+    this.iris.put(string, iri);
+  }
+  return iri;
+};
+RdfTermCache.prototype.getBlankNode = function(string) {
+  var bnode = this.bnodes.get(string);
+  if (bnode === null) {
+    bnode = new rdf.BlankNode(string);
+    this.bnodes.put(string, bnode);
+  }
+  return bnode;
+};
+RdfTermCache.prototype.getLiteral = function(lexicalValue, language, datatype, native) {
+  // Double quotes because they do not appear un-escaped in literals
+  var key = lexicalValue + '"' + language + '"' + datatype + '"' + native;
+  var literal = this.literals.get(key);
+  if (literal === null) {
+    literal = new rdf.Literal(lexicalValue, language, datatype, native);
+    this.literals.put(key, literal);
+  }
+  return literal;
+};
+
+const cache = new RdfTermCache(50);
+const nsm = new NamespaceManager(cache);
+nsm.createNamespace('rdf', 'http://www.w3.org/1999/02/22-rdf-syntax-ns#');
+nsm.createNamespace('ldp', 'http://www.w3.org/ns/ldp#');
+nsm.createNamespace('schema', 'http://schema.org/');
+
+// Where the data will be stored
+let collection = {};
+// Increment for POST requests
+let nextCollectionIdxToCheck = 0;
+
+const rootGraph = rdf.createGraph();
+rootGraph.addAll(
+  [
+    new rdf.Triple(
+      cache.getIRI(''),
+      nsm.ns.rdf('type'),
+      nsm.ns.ldp('BasicContainer'))
+  ]
+);
 
 /**
- * parse everything as text (and try to get the best out of the libs)
+ * GET root
  */
-app.use(bodyParser.text({
-    type: ACCEPTALL
-}))
-
-/* returns an accordingly formatted response to the base object */
 app.get('/', (req, res) => {
-    buildRdf(messages, req, res);
-})
+  const contentGraph = [];
+  Object.keys(collection).forEach((o) => {
+    contentGraph.push(
+      new rdf.Triple(
+        cache.getIRI(''),
+        nsm.ns.ldp('contains'),
+        cache.getIRI(o.toString())
+      )
+    );
+  });
+  res.sendGraph(rootGraph.merge(contentGraph));
+});
 
 /**
- * needs to receive the document and format it
+ * GET entry of collection
  */
 app.get('/:id', (req, res) => {
-    if (messages.length < req.params.id ||  req.params.id < 1) {
-        res.status(404).send("No document found with id " + req.params.id);
-    } else {
-        buildRdf(messages[req.params.id - 1], req, res)
-    }
-})
+  if (!(req.params.id in collection)) {
+    res.sendStatus(404);
+    return;
+  } else {
+    if ('text' in collection[req.params.id])
+      res.sendGraph(rdf.createGraph([rdf.createTriple(cache.getIRI('#it'), nsm.ns.schema('text'), cache.getLiteral(collection[req.params.id].text))]));
+    else if ('image' in collection[req.params.id])
+      res.sendGraph(rdf.createGraph([rdf.createTriple(cache.getIRI('#it'), nsm.ns.schema('image'), cache.getIRI(collection[req.params.id].image))]));
+    else
+      res.sendStatus(500);
+  }
+});
 
 /**
- * does not support JSON-LD yet
+ * POST something to collection
  */
 app.post('/', (req, res) => {
-    let store = $rdf.graph();
-    let mimeType = req.headers['content-type'];;
+  if (!req.graph) {
+    res.status(400);
+    res.send("Please supply a parseable graph.");
+    return;
+  }
+  do {
+  ++nextCollectionIdxToCheck;
+  } while (nextCollectionIdxToCheck - 1 in collection);
+  
+  var targetStateTripleCount = 0;
+  var statetriple;
+  req.graph.filter(
+    function(triple) {
+      return triple.predicate.nominalValue === 'http://schema.org/text' || triple.predicate.nominalValue === 'http://schema.org/image'
+        }).forEach(function(triple) {
+          ++targetStateTripleCount;
+          statetriple = triple;
+        });
+  if (targetStateTripleCount === 0 || targetStateTripleCount > 1) {
+      res.status(400);
+      res.send('Please supply exactly one triple with predicate http://schema.org/text or http://schema.org/image\n');
+      return;
+  }
 
-    let url = req.protocol + "://" + req.hostname;
-    $rdf.parse(req.body, store, url, mimeType, (err, content) => {
-        if (err) {
-            res.status(400).send(err);
-            console.log("err", err);
-        } else {
-            messages.push(content);
-            res.send({
-                success: true,
-                storeSize: messages.length
-            });
-        }
-    });
-})
+  switch (statetriple.predicate.nominalValue) {
+    case "http://schema.org/text":
+      if (statetriple.object.interfaceName !== "Literal") {
+        res.status(400);
+        res.send("Please supply a Literal in object position");
+        return;
+      }
+      collection[nextCollectionIdxToCheck - 1] = { "text" : statetriple.object.nominalValue } ;
+      break;
+    case "http://schema.org/image":
+      if (statetriple.object.interfaceName !== "NamedNode") {
+        res.status(400);
+        res.send("Please supply an URI in object position");
+        return;
+      }
+      collection[nextCollectionIdxToCheck - 1] = { "image" : statetriple.object.nominalValue } ;
+      break;
+    default:
+      res.status(400);
+      res.send('Please supply a triple with saref:hasState as predicate and saref:Off or saref:On as object\n');
+      return;
+  };
+
+  res.location(nextCollectionIdxToCheck - 1);
+  res.sendStatus(201);
+});
 
 /**
- * clears the store 
+ * PUT something to collection
+ */
+app.put('/:id', (req, res) => {
+  if (!req.graph) {
+    res.status(400);
+    res.send("Please supply a parseable graph.");
+    return;
+  }
+
+  let overwriting = false;
+  if (req.params.id in collection)
+    overwriting = true;
+
+  var targetStateTripleCount = 0;
+  var statetriple;
+  req.graph.filter(
+    function(triple) {
+      return triple.predicate.nominalValue === 'http://schema.org/text' || triple.predicate.nominalValue === 'http://schema.org/image'
+        }).forEach(function(triple) {
+          ++targetStateTripleCount;
+          statetriple = triple;
+        });
+  if (targetStateTripleCount === 0 || targetStateTripleCount > 1) {
+      res.status(400);
+      res.send('Please supply exactly one triple with predicate http://schema.org/text or http://schema.org/image\n');
+      return;
+  }
+
+  switch (statetriple.predicate.nominalValue) {
+    case "http://schema.org/text":
+      if (statetriple.object.interfaceName !== "Literal") {
+        res.status(400);
+        res.send("Please supply a Literal in object position");
+        return;
+      }
+      collection[req.params.id] = { "text" : statetriple.object.nominalValue } ;
+      break;
+    case "http://schema.org/image":
+      if (statetriple.object.interfaceName !== "NamedNode") {
+        res.status(400);
+        res.send("Please supply an URI in object position");
+        return;
+      }
+      collection[req.params.id] = { "image" : statetriple.object.nominalValue } ;
+      break;
+    default:
+      res.status(400);
+      res.send('Please supply a triple with saref:hasState as predicate and saref:Off or saref:On as object\n');
+      return;
+  };
+
+  if (overwriting)
+    res.sendStatus(200);
+  else
+    res.sendStatus(201);
+});
+
+/**
+ * DELETE one thing in the collection 
+ */
+app.delete('/:id', (req, res) => {
+  if (req.params.id in collection) {
+    delete collection[req.params.id];
+    res.sendStatus(204);
+  } else 
+    res.sendStatus(404);
+});
+
+/**
+ * DELETE everything in the collection 
  */
 app.delete('/', (req, res) => {
-    messages = [];
-    res.json({
-        success: true
-    });
-})
+  collection = {};
+  res.sendStatus(204);
+});
 
 /**
- *   outputs the data for the display
+ * Periodically updating the screen
  */
-app.post('/getSeriousDataFormat', (req, res) => {
-    const matching = messages.filter((message) => message.statementsMatching(undefined, RDF("label"), undefined));
-    let output = [];
-    matching.map((message, idx) => output.push({
-        message: matching[0].statements[0].object.value,
-        index: idx
-    }));
-    res.json({
-        success: true,
-        output
+let previouslyPostedData = "";
+const checknpost = function() {
+  let requestPayload = [];
+  const currentCollection = JSON.stringify(collection);
+  if (currentCollection !== previouslyPostedData) {
+    previouslyPostedData = currentCollection;
+    Object.keys(collection).forEach(key => {
+      requestPayload.push(collection[key]);
     });
-});
+    request({
+      uri : "http://localhost:5000/",
+      method : "PUT",
+      timeout : 50,
+      json : requestPayload
+    }, (err) => {
+      if (err)
+        console.log(err);
+    });
+  }
+};
+let timeout = setInterval(checknpost, 500);
 
 /**
  * makes the app listen on the selected port
  */
 app.listen(httpPort, () => {
-    console.log('Turtle and JSON-LD receiver ready on port ' + httpPort);
+    console.log('Server ready on port ' + httpPort);
 });
+

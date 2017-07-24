@@ -1,19 +1,25 @@
 {
   "name": "express_ld",
-  "version": "1.0.0",
-  "description": "A simple store for linked data based on nodejs",
+  "version": "1.0.1",
+  "description": "Read-Write Linked Data interface to the JSON display interface",
   "main": "index.js",
   "scripts": {
     "start": "node_modules/nodemon/bin/nodemon.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "author": "",
+  "author": "Sebastian & Tobias",
+  "repository":"http://github.com/slauber/express_ld/",
   "license": "ISC",
   "dependencies": {
-    "body-parser": "^1.17.2",
-    "express": "^4.15.3",
     "jsonld": "^0.4.12",
     "nodemon": "^1.11.0",
-    "rdflib": "^0.15.0"
+    "rdflib": "^0.15.0",
+    "express":"^4.14.0",
+    "request":"^2.81.0",
+    "morgan":"^1.7.0",
+    "body-parser":"^1.15.2",
+    "rdf-ext" : "^0.3.0",
+    "rdf-serializer-rdfxml" : "file:../rdf-serializer-rdfxml",
+    "rdf-body-parser" : "file:../rdf-body-parser"
   }
 }
