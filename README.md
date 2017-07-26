@@ -4,8 +4,6 @@ Simple storage for linked data resources. Uses [express](http://expressjs.com), 
 Requires [Node.js](https://nodejs.org/en/download/) with npm (build and tested on Node.js Version 8).
 
 ## Install
-- clone https://github.com/kaefer3000/rdf-body-parser/
-- clone https://github.com/kaefer3000/rdf-serializer-rdfxml/
 - clone repo
 - cd into it
 - `npm i`
