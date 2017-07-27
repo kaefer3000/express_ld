@@ -287,7 +287,7 @@ const checknpost = function() {
     request({
       uri : "http://localhost:5000/",
       method : "PUT",
-      timeout : 50,
+      timeout : 2250,
       json : requestPayload
     }, (err) => {
       if (err)
@@ -295,7 +295,7 @@ const checknpost = function() {
     });
   }
 };
-let timeout = setInterval(checknpost, 500);
+let timeout = setInterval(checknpost, 2500);
 
 /**
  * makes the app listen on the selected port
