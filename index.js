@@ -1,7 +1,7 @@
 /* we'll write proper js code */
 "use strict";
 
-const httpPort = 8080;
+const httpPort = 80;
 
 // Load a LRU cache implementation
 const LRUcache = require('lru-cache-js')
@@ -285,9 +285,9 @@ const checknpost = function() {
       requestPayload.push(collection[key]);
     });
     request({
-      uri : "http://localhost:5000/",
+      uri : "http://127.0.0.1:5000/",
       method : "PUT",
-      timeout : 2250,
+      timeout : 22500,
       json : requestPayload
     }, (err) => {
       if (err)
@@ -295,7 +295,8 @@ const checknpost = function() {
     });
   }
 };
-let timeout = setInterval(checknpost, 2500);
+let interval;
+setTimeout(function() { interval = setInterval(checknpost, 2500);console.log("first request executed");},3000)
 
 /**
  * makes the app listen on the selected port
